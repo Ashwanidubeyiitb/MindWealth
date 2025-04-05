@@ -99,7 +99,7 @@ class TradingModel:
             return False
     
     def generate_signals(self, data, predictions):
-        """Generate high-performance trading signals optimized for success rate, returns, and frequency"""
+        """Generate high-quality trading signals with balanced metrics"""
         from trading_strategies import TradeSignal, Action
         
         signals = []
@@ -121,7 +121,7 @@ class TradingModel:
         unique, counts = np.unique(predicted_classes, return_counts=True)
         print("\nPrediction distribution:", dict(zip(unique, counts)))
         
-        # Calculate technical indicators - premium indicator set
+        # Calculate technical indicators - optimized for quality trades
         data['sma5'] = data['Close'].rolling(window=5).mean()
         data['sma10'] = data['Close'].rolling(window=10).mean() 
         data['sma20'] = data['Close'].rolling(window=20).mean()
@@ -145,15 +145,15 @@ class TradingModel:
         data['volume_ratio'] = data['Volume'] / data['volume_ma20']
         data['volume_spike'] = data['volume_ratio'] > 1.5
         
-        # RSI indicator with zones and divergence
+        # RSI indicator with zones
         delta = data['Close'].diff()
         gain = (delta.where(delta > 0, 0)).rolling(window=14).mean()
         loss = (-delta.where(delta < 0, 0)).rolling(window=14).mean()
         rs = gain / loss
         data['rsi'] = 100 - (100 / (1 + rs))
         data['rsi_ma3'] = data['rsi'].rolling(window=3).mean()
-        data['rsi_oversold'] = data['rsi'] < 35
-        data['rsi_overbought'] = data['rsi'] > 70
+        data['rsi_oversold'] = data['rsi'] < 35  # More selective (35 instead of 40)
+        data['rsi_overbought'] = data['rsi'] > 70  # More selective (70 instead of 65)
         
         # Bollinger Bands with volatility analysis
         data['bb_mid'] = data['Close'].rolling(window=20).mean()
@@ -178,6 +178,11 @@ class TradingModel:
         data['reversal_down'] = (data['Close'] < data['Close'].shift(1)) & (data['Close'].shift(1) < data['Close'].shift(2)) & (data['Close'].shift(2) < data['Close'].shift(3))
         data['reversal_up'] = (data['Close'] > data['Close'].shift(1)) & (data['Close'].shift(1) > data['Close'].shift(2)) & (data['Close'].shift(2) > data['Close'].shift(3))
         
+        # Additional indicators
+        data['price_above_ma'] = data['Close'] > data['sma10']
+        data['volume_surge'] = data['Volume'] > data['volume_ma20'] * 1.3
+        data['momentum_shift'] = (data['roc1'] > 0) & (data['roc1'].shift(1) < 0)
+        
         # Fill NaN values
         data = data.fillna(method='bfill')
         
@@ -186,14 +191,17 @@ class TradingModel:
         sell_signals_quality = []
         trade_results = []
         
-        # Optimized parameters - final performance tuning
-        quality_threshold_buy = 18  # Even lower for more trades
-        quality_threshold_sell = 26  # Lower to take profits more readily
+        # Balanced parameters - optimized for quality over quantity
+        quality_threshold_buy = 30       # More selective entries
+        quality_threshold_sell = 25      # More selective exits
         
-        # High profit targets with volatility adjustment
-        base_take_profit_pct = 0.065   # 6.5% target (higher for better returns)
-        min_stop_loss_pct = 0.015      # 1.5% stop loss (tight stops)
-        trailing_stop_factor = 0.60    # 60% of ATR (balanced)
+        # Maximum hold period - increased for more patience
+        max_hold_days = 25               # Longer max hold period
+        
+        # Better profit targets and stops
+        base_take_profit_pct = 0.052     # 5.2% target (higher)
+        min_stop_loss_pct = 0.015        # 1.5% stop loss (tight)
+        trailing_stop_factor = 0.70      # 70% of ATR (less tight)
         
         # Position tracking
         entry_price = 0
@@ -206,236 +214,312 @@ class TradingModel:
         consecutive_wins = 0
         consecutive_losses = 0
         
-        # Generate signals - start from index 30 for more trading opportunities
-        for i in range(30, len(data)):
-            if i >= len(probs):
-                break
-            
-            if days_since_last_trade < min_hold_period:
+        # Start from later index to allow for indicator warmup
+        start_idx = 40
+        
+        # Track days in any trade
+        trade_duration = 0
+        
+        # Generate signals
+        if len(data) > start_idx:
+            for i in range(start_idx, len(data)):
                 days_since_last_trade += 1
-                continue
-            
-            # Extract indicators
-            close = data.iloc[i]['Close']
-            sma5 = data.iloc[i]['sma5']
-            sma20 = data.iloc[i]['sma20']
-            sma50 = data.iloc[i]['sma50']
-            ema9 = data.iloc[i]['ema9'] 
-            ema21 = data.iloc[i]['ema21']
-            rsi = data.iloc[i]['rsi']
-            rsi_ma3 = data.iloc[i]['rsi_ma3']
-            bb_pct = data.iloc[i]['bb_pct']
-            volume_ratio = data.iloc[i]['volume_ratio']
-            atr_pct = data.iloc[i]['atr_pct']
-            trend_strength = data.iloc[i]['trend_strength']
-            
-            # BUY signal generation - premium entry strategy
-            if not in_position:
-                buy_quality = 0
-                buy_reason = []
                 
-                # 1. Model probability (0-30 points)
-                model_confidence = probs[i-30, 1] * 100  # Uptrend probability
-                buy_quality += min(model_confidence * 0.3, 30)
+                # Extract data for current bar
+                close = data.iloc[i]['Close']
+                rsi = data.iloc[i]['rsi']
+                bb_pct = data.iloc[i]['bb_pct']
+                atr = data.iloc[i]['atr']
                 
-                if model_confidence > 20:
-                    buy_reason.append(f"ML signal ({model_confidence:.1f}%)")
-                
-                # 2. RSI oversold bounce (0-20 points)
-                if data.iloc[i]['rsi_oversold'] and rsi > rsi_ma3:
-                    buy_quality += 20
-                    buy_reason.append(f"RSI bounce ({rsi:.1f})")
-                
-                # 3. Golden cross (0-25 points)
-                if data.iloc[i]['golden_cross']:
-                    buy_quality += 25
-                    buy_reason.append("EMA cross")
-                
-                # 4. Price above moving average (0-15 points)
-                if close > sma5 and close > sma20:
-                    buy_quality += 15
-                    buy_reason.append("Above MAs")
-                
-                # 5. Bollinger band bounce (0-20 points)
-                if bb_pct < 0.05 and close > data.iloc[i-1]['Close']:
-                    buy_quality += 20
-                    buy_reason.append(f"BB bounce ({bb_pct:.2f})")
-                
-                # 6. BB squeeze breakout (0-20 points)
-                if data.iloc[i]['bb_squeeze'] and data.iloc[i]['bb_expanding'] and close > data.iloc[i-1]['Close']:
-                    buy_quality += 20
-                    buy_reason.append("BB squeeze breakout")
-                
-                # 7. Volume confirmation (0-15 points)
-                if data.iloc[i]['volume_spike'] and close > data.iloc[i-1]['Close']:
-                    buy_quality += 15
-                    buy_reason.append(f"Volume spike ({volume_ratio:.1f}x)")
-                
-                # 8. Uptrend strength (0-15 points)
-                if trend_strength > 2.0 and close > sma50:
-                    buy_quality += 15
-                    buy_reason.append(f"Strong trend ({trend_strength:.1f}%)")
-                
-                # 9. Reversal pattern (0-20 points)
-                if data.iloc[i]['reversal_up']:
-                    buy_quality += 20
-                    buy_reason.append("Reversal pattern")
-                
-                # Adaptive threshold after losses
-                if consecutive_losses > 2:
-                    buy_quality += 5  # Easier entries after losses
-                
-                # Generate buy signal if quality threshold met
-                if buy_quality >= quality_threshold_buy:
-                    signal = TradeSignal()
-                    signal.action = Action.BUY
-                    signal.date = data.iloc[i]['Date'].strftime('%Y-%m-%d')
-                    signal.price = close
-                    signals.append(signal)
-                    in_position = True
-                    days_since_last_trade = 0
-                    buy_signals_quality.append(buy_quality)
+                # Check if we have a valid prediction for this bar
+                pred_idx = i - start_idx
+                if pred_idx < len(predicted_classes):
+                    pred_class = predicted_classes[pred_idx]
+                    pred_probs = probs[pred_idx] if len(probs) > 0 else np.array([0, 0, 0])
                     
-                    # Set position parameters
-                    entry_price = close
-                    entry_date_idx = i
+                    buy_quality = 0
+                    sell_quality = 0
+                    buy_reason = []
+                    sell_reason = []
                     
-                    # Set profit target - scale with volatility
-                    profit_factor = 1.0
-                    if trend_strength > 5.0:
-                        profit_factor = 1.2  # 20% higher target in strong trends
-                    
-                    profit_target = entry_price * (1 + base_take_profit_pct * profit_factor)
-                    
-                    # Set stop loss - volatility adjusted but with minimum
-                    stop_loss_pct = max(min_stop_loss_pct, atr_pct * 0.75)
-                    stop_level = entry_price * (1 - stop_loss_pct)
-                    
-                    highest_since_entry = entry_price
-                    
-                    print(f"→ BUY signal at {close:.2f} (quality: {buy_quality:.1f}/100)")
-                    print(f"  Reasons: {', '.join(buy_reason)}")
-                    print(f"  Target: +{base_take_profit_pct*100*profit_factor:.1f}%, Stop: -{stop_loss_pct*100:.1f}%")
-            
-            # SELL signal generation - advanced exit strategy
-            elif in_position:
-                sell_quality = 0
-                sell_reason = []
-                
-                # Update position tracking - advanced trailing stop
-                if close > highest_since_entry:
-                    highest_since_entry = close
-                    current_gain_pct = (highest_since_entry / entry_price - 1) * 100
-                    
-                    # Trailing stop logic - tightens as profit grows
-                    if current_gain_pct > 2.0:
-                        # Progressively tighter trailing stop as profit grows
-                        trailing_factor = trailing_stop_factor * (1 - min(current_gain_pct / 15, 0.7))
-                        new_stop = highest_since_entry * (1 - trailing_factor * atr_pct / 100)
-                        if new_stop > stop_level:
-                            stop_level = new_stop
-                
-                # Current profit calculation
-                current_profit_pct = (close / entry_price - 1) * 100
-                days_in_trade = i - entry_date_idx
-                
-                # Automatic exit conditions - highest priority
-                if close >= profit_target:
-                    sell_quality = 100
-                    sell_reason.append(f"Take profit ({current_profit_pct:.1f}%)")
-                elif close <= stop_level:
-                    sell_quality = 100
-                    sell_reason.append(f"Stop loss ({current_profit_pct:.1f}%)")
-                else:
-                    # 1. Death cross (0-25 points)
-                    if data.iloc[i]['death_cross']:
-                        sell_quality += 25
-                        sell_reason.append("Death cross")
-                    
-                    # 2. RSI overbought reversal (0-20 points)
-                    if data.iloc[i]['rsi_overbought'] and rsi < data.iloc[i-1]['rsi']:
-                        sell_quality += 20
-                        sell_reason.append(f"RSI reversal ({rsi:.1f})")
-                    
-                    # 3. Momentum exhaustion (0-20 points)
-                    if (data.iloc[i]['roc1'] < 0 and 
-                        data.iloc[i-1]['roc1'] < 0 and 
-                        data.iloc[i-2]['roc1'] < 0):
-                        sell_quality += 20
-                        sell_reason.append("Momentum exhaustion")
-                    
-                    # 4. Moving average breakdown (0-15 points)
-                    if close < sma5 and data.iloc[i-1]['Close'] > data.iloc[i-1]['sma5'] and current_profit_pct > 1.0:
-                        sell_quality += 15
-                        sell_reason.append("MA breakdown")
-                    
-                    # 5. Upper Bollinger Band rejection (0-15 points)
-                    if bb_pct > 0.95 and close < data.iloc[i-1]['Close']:
-                        sell_quality += 15
-                        sell_reason.append(f"BB rejection ({bb_pct:.2f})")
-                    
-                    # 6. Profit protection - aggressive scaling with gain size (0-30 points)
-                    if current_profit_pct > 3.5:
-                        # More aggressive profit protection
-                        profit_protection = min(current_profit_pct * 5, 30)
-                        sell_quality += profit_protection
-                        sell_reason.append(f"Profit protection (+{current_profit_pct:.1f}%)")
-                    
-                    # 7. Time-based exit - only for profitable trades (0-10 points) 
-                    if days_in_trade > 7 and current_profit_pct > 2.0:
-                        time_points = min(days_in_trade - 7, 10)
-                        sell_quality += time_points
-                        sell_reason.append(f"Time exit ({days_in_trade} days)")
-                    
-                    # 8. Major trend reversal (0-20 points)
-                    if (current_profit_pct > 2.5 and
-                        data.iloc[i]['reversal_down']):
-                        sell_quality += 20
-                        sell_reason.append("Reversal pattern")
-                    
-                    # 9. Higher target hit with volatility (0-25 points)
-                    if current_profit_pct > 5.0 and data.iloc[i]['atr_pct'] > data.iloc[i-5:i]['atr_pct'].mean():
-                        sell_quality += 25
-                        sell_reason.append(f"Target achieved in volatility ({current_profit_pct:.1f}%)")
-                
-                # Generate sell signal if quality threshold met
-                if sell_quality >= quality_threshold_sell:
-                    signal = TradeSignal()
-                    signal.action = Action.SELL
-                    signal.date = data.iloc[i]['Date'].strftime('%Y-%m-%d')
-                    signal.price = close
-                    signals.append(signal)
-                    in_position = False
-                    days_since_last_trade = 0
-                    sell_signals_quality.append(sell_quality)
-                    
-                    # Calculate and log trade result
-                    if entry_price > 0:
-                        pct_gain = (close / entry_price - 1) * 100
-                        trade_results.append(pct_gain)
-                        days_held = i - entry_date_idx
+                    # If not in a position, look for buy signals
+                    if not in_position and days_since_last_trade >= min_hold_period:
+                        # Neural network prediction (0-25 points)
+                        if pred_class == 1:  # Buy signal
+                            buy_quality += 25 
+                            buy_reason.append(f"NN prediction ({pred_probs[1]:.2f})")
+                        elif pred_class == 2:  # Strong buy
+                            buy_quality += 25
+                            buy_reason.append(f"NN strong signal ({pred_probs[2]:.2f})")
                         
-                        # Update consecutive win/loss tracking
-                        if pct_gain > 0:
-                            consecutive_wins += 1
-                            consecutive_losses = 0
-                        else:
+                        # RSI oversold (0-20 points)
+                        if data.iloc[i]['rsi_oversold'] and rsi > data.iloc[i-1]['rsi']:
+                            buy_quality += 20
+                            buy_reason.append(f"RSI oversold ({rsi:.1f})")
+                        
+                        # Bollinger Band bounce (0-20 points)
+                        if bb_pct < 0.05 and close > data.iloc[i-1]['Close']:
+                            buy_quality += 20
+                            buy_reason.append(f"BB bounce ({bb_pct:.2f})")
+                        
+                        # Golden cross (0-25 points)
+                        if data.iloc[i]['golden_cross']:
+                            buy_quality += 25
+                            buy_reason.append("Golden cross")
+                        
+                        # Strong momentum (0-15 points)
+                        if data.iloc[i]['momentum_up']:
+                            buy_quality += 15
+                            buy_reason.append("Strong momentum")
+                        
+                        # Price above key MA (0-10 points)
+                        if data.iloc[i]['price_above_ma']:
+                            buy_quality += 10
+                            buy_reason.append("Above MA")
+                        
+                        # Trend strength (0-15 points)
+                        if data.iloc[i]['trend_strength'] > 1.5:
+                            # Scale points based on trend strength
+                            trend_points = min(data.iloc[i]['trend_strength'] * 3, 15)
+                            buy_quality += trend_points
+                            buy_reason.append(f"Trend strength ({data.iloc[i]['trend_strength']:.1f}%)")
+                        
+                        # Reversal pattern (0-15 points)
+                        if data.iloc[i]['reversal_up']:
+                            buy_quality += 15
+                            buy_reason.append("Reversal pattern")
+                        
+                        # Volume confirmation (0-15 points)
+                        if data.iloc[i]['volume_surge']:
+                            buy_quality += 15
+                            buy_reason.append("Volume surge")
+                        
+                        # Adapt after losses (0-20 points)
+                        if consecutive_losses > 1:
+                            loss_adjustment = min(consecutive_losses * 7, 20)
+                            buy_quality += loss_adjustment
+                            buy_reason.append(f"Loss adaptation (+{loss_adjustment})")
+                        
+                        # Generate buy signal if quality threshold met
+                        if buy_quality >= quality_threshold_buy:
+                            signal = TradeSignal()
+                            signal.action = Action.BUY
+                            signal.date = data.iloc[i]['Date'].strftime('%Y-%m-%d')
+                            signal.price = close
+                            signals.append(signal)
+                            
+                            # Update state
+                            in_position = True
+                            entry_price = close
+                            entry_date_idx = i
+                            highest_since_entry = close
+                            days_since_last_trade = 0
+                            
+                            # Calculate stop and targets
+                            atr_value = data.iloc[i]['atr']
+                            volatility_factor = min(1.0, data.iloc[i]['atr_pct'] / 2)  # Cap at 1.0
+                            profit_target = entry_price * (1 + base_take_profit_pct * volatility_factor)
+                            stop_level = entry_price * (1 - min_stop_loss_pct)
+                            
+                            buy_signals_quality.append(buy_quality)
+                            
+                            print(f"→ BUY signal at {close:.2f} (quality: {buy_quality:.1f}/100)")
+                            print(f"  Reasons: {', '.join(buy_reason)}")
+                            print(f"  Target: +{base_take_profit_pct*100:.1f}%, Stop: -{min_stop_loss_pct*100:.1f}%")
+                    
+                    # If in a position, look for exit conditions
+                    elif in_position:
+                        # Update tracking variables
+                        highest_since_entry = max(highest_since_entry, close)
+                        days_in_trade = i - entry_date_idx
+                        
+                        # Check if stop loss hit or maximum hold time reached
+                        if close <= stop_level:
+                            signal = TradeSignal()
+                            signal.action = Action.SELL
+                            signal.date = data.iloc[i]['Date'].strftime('%Y-%m-%d')
+                            signal.price = close
+                            signals.append(signal)
+                            in_position = False
+                            days_since_last_trade = 0
+                            sell_signals_quality.append(100)  # Maximum quality for stop loss
+                            
+                            # Calculate and log trade result
+                            pct_gain = (close / entry_price - 1) * 100
+                            trade_results.append(pct_gain)
+                            days_held = i - entry_date_idx
+                            
+                            # Update consecutive win/loss tracking
                             consecutive_losses += 1
                             consecutive_wins = 0
+                            
+                            print(f"← SELL signal at {close:.2f} (STOP LOSS HIT)")
+                            print(f"  Result: {pct_gain:.2f}% loss, Held: {days_held} days")
                         
-                        print(f"← SELL signal at {close:.2f} (quality: {sell_quality:.1f}/100)")
-                        print(f"  Reasons: {', '.join(sell_reason)}")
-                        print(f"  Result: {pct_gain:.2f}% gain, Held: {days_held} days")
-            
-            # Position tracking logs - only show every 5 days to reduce clutter
-            if in_position and entry_price > 0 and i % 5 == 0:
-                current_gain = (close / entry_price - 1) * 100
-                days_held = i - entry_date_idx
-                print(f"  Position open: Day {days_held}, P&L: {current_gain:.2f}%, "
-                      f"Stop: {(stop_level/entry_price-1)*100:.2f}%")
+                        # Force exit after maximum hold period
+                        elif days_in_trade >= max_hold_days:
+                            signal = TradeSignal()
+                            signal.action = Action.SELL
+                            signal.date = data.iloc[i]['Date'].strftime('%Y-%m-%d')
+                            signal.price = close
+                            signals.append(signal)
+                            in_position = False
+                            days_since_last_trade = 0
+                            sell_signals_quality.append(100)  # Maximum quality for max hold
+                            
+                            # Calculate and log trade result
+                            pct_gain = (close / entry_price - 1) * 100
+                            trade_results.append(pct_gain)
+                            days_held = i - entry_date_idx
+                            
+                            # Update consecutive win/loss tracking
+                            if pct_gain > 0:
+                                consecutive_wins += 1
+                                consecutive_losses = 0
+                            else:
+                                consecutive_losses += 1
+                                consecutive_wins = 0
+                            
+                            print(f"← SELL signal at {close:.2f} (MAX HOLD PERIOD)")
+                            print(f"  Result: {pct_gain:.2f}% gain, Held: {days_held} days (max)")
+                        
+                        # Check if profit target hit
+                        elif close >= profit_target:
+                            signal = TradeSignal()
+                            signal.action = Action.SELL
+                            signal.date = data.iloc[i]['Date'].strftime('%Y-%m-%d')
+                            signal.price = close
+                            signals.append(signal)
+                            in_position = False
+                            days_since_last_trade = 0
+                            sell_signals_quality.append(100)  # Maximum quality for profit target
+                            
+                            # Calculate and log trade result
+                            pct_gain = (close / entry_price - 1) * 100
+                            trade_results.append(pct_gain)
+                            days_held = i - entry_date_idx
+                            
+                            # Update consecutive win/loss tracking
+                            consecutive_wins += 1
+                            consecutive_losses = 0
+                            
+                            print(f"← SELL signal at {close:.2f} (TARGET REACHED)")
+                            print(f"  Result: {pct_gain:.2f}% gain, Held: {days_held} days")
+                        
+                        # Check for trailing stop (after 2.5% profit)
+                        elif (highest_since_entry / entry_price > 1.025 and 
+                              close <= highest_since_entry * (1 - trailing_stop_factor * atr / highest_since_entry)):
+                            signal = TradeSignal()
+                            signal.action = Action.SELL
+                            signal.date = data.iloc[i]['Date'].strftime('%Y-%m-%d')
+                            signal.price = close
+                            signals.append(signal)
+                            in_position = False
+                            days_since_last_trade = 0
+                            sell_signals_quality.append(100)  # Maximum quality for trailing stop
+                            
+                            # Calculate and log trade result
+                            pct_gain = (close / entry_price - 1) * 100
+                            trade_results.append(pct_gain)
+                            days_held = i - entry_date_idx
+                            
+                            # Update consecutive win/loss tracking
+                            if pct_gain > 0:
+                                consecutive_wins += 1
+                                consecutive_losses = 0
+                            else:
+                                consecutive_losses += 1
+                                consecutive_wins = 0
+                            
+                            print(f"← SELL signal at {close:.2f} (TRAILING STOP)")
+                            print(f"  Result: {pct_gain:.2f}% gain, Held: {days_held} days")
+                            print(f"  High: {highest_since_entry:.2f} ({(highest_since_entry/entry_price-1)*100:.2f}%)")
+                        
+                        # Consider other exit signals
+                        else:
+                            current_profit_pct = (close / entry_price - 1) * 100
+                            
+                            # 1. Death cross (0-25 points)
+                            if data.iloc[i]['death_cross']:
+                                sell_quality += 25
+                                sell_reason.append("Death cross")
+                            
+                            # 2. RSI overbought reversal (0-20 points)
+                            if data.iloc[i]['rsi_overbought'] and rsi < data.iloc[i-1]['rsi']:
+                                sell_quality += 20
+                                sell_reason.append(f"RSI reversal ({rsi:.1f})")
+                            
+                            # 3. Momentum exhaustion (0-20 points)
+                            if (data.iloc[i]['roc1'] < 0 and 
+                                data.iloc[i-1]['roc1'] < 0 and
+                                data.iloc[i-2]['roc1'] < 0):  # Now require 3 days negative
+                                sell_quality += 20
+                                sell_reason.append("Momentum exhaustion")
+                            
+                            # 4. Moving average breakdown (0-15 points)
+                            if close < data.iloc[i]['sma10'] and current_profit_pct > 1.0:
+                                sell_quality += 15
+                                sell_reason.append("MA breakdown")
+                            
+                            # 5. Upper Bollinger Band rejection (0-15 points)
+                            if bb_pct > 0.95 and close < data.iloc[i-1]['Close']:
+                                sell_quality += 15
+                                sell_reason.append(f"BB rejection ({bb_pct:.2f})")
+                            
+                            # 6. Profit protection - more significant profits
+                            if current_profit_pct > 3.0:
+                                profit_protection = min(current_profit_pct * 5, 25)
+                                sell_quality += profit_protection
+                                sell_reason.append(f"Profit protection (+{current_profit_pct:.1f}%)")
+                            
+                            # 7. Time-based exit - only with profit
+                            if days_in_trade > 12 and current_profit_pct > 1.5:
+                                time_points = min(days_in_trade, 20)
+                                sell_quality += time_points
+                                sell_reason.append(f"Time exit ({days_in_trade} days)")
+                            
+                            # 8. Major trend reversal (0-20 points)
+                            if data.iloc[i]['reversal_down'] and current_profit_pct > 1.0:
+                                sell_quality += 20
+                                sell_reason.append("Reversal pattern")
+                            
+                            # Generate sell signal if quality threshold met
+                            if sell_quality >= quality_threshold_sell:
+                                signal = TradeSignal()
+                                signal.action = Action.SELL
+                                signal.date = data.iloc[i]['Date'].strftime('%Y-%m-%d')
+                                signal.price = close
+                                signals.append(signal)
+                                in_position = False
+                                days_since_last_trade = 0
+                                sell_signals_quality.append(sell_quality)
+                                
+                                # Calculate and log trade result
+                                pct_gain = (close / entry_price - 1) * 100
+                                trade_results.append(pct_gain)
+                                days_held = i - entry_date_idx
+                                
+                                # Update consecutive win/loss tracking
+                                if pct_gain > 0:
+                                    consecutive_wins += 1
+                                    consecutive_losses = 0
+                                else:
+                                    consecutive_losses += 1
+                                    consecutive_wins = 0
+                                
+                                print(f"← SELL signal at {close:.2f} (quality: {sell_quality:.1f}/100)")
+                                print(f"  Reasons: {', '.join(sell_reason)}")
+                                print(f"  Result: {pct_gain:.2f}% gain, Held: {days_held} days")
+                
+                # Position tracking logs - only show every 5 days to reduce clutter
+                if in_position and entry_price > 0 and i % 5 == 0:
+                    current_gain = (close / entry_price - 1) * 100
+                    days_held = i - entry_date_idx
+                    print(f"  Position open: Day {days_held}, P&L: {current_gain:.2f}%, "
+                          f"Stop: {(stop_level/entry_price-1)*100:.2f}%")
         
         # Force close any open position at the end
-        if in_position and entry_price > 0 and i == len(data) - 1:
+        if in_position and entry_price > 0:
             signal = TradeSignal()
             signal.action = Action.SELL
             signal.date = data.iloc[-1]['Date'].strftime('%Y-%m-%d')
