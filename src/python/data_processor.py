@@ -178,7 +178,7 @@ def prepare_labels(features):
     return features
 
 def generate_balanced_labels(features):
-    """Create more balanced labels with emphasis on trading signals"""
+    """Create balanced labels optimized for frequent trading"""
     # Reset the target column
     features['target'] = 1  # Default to hold
     
@@ -186,10 +186,10 @@ def generate_balanced_labels(features):
     valid_indices = features.index.tolist()
     n = len(valid_indices)
     
-    # Increase trading signals to 30% each (Buy/Sell)
-    buy_indices = np.random.choice(valid_indices, size=int(n*0.3), replace=False)
+    # Increase trading signals to 40% each (Buy/Sell) for more frequent trading
+    buy_indices = np.random.choice(valid_indices, size=int(n*0.4), replace=False)
     sell_indices_pool = [idx for idx in valid_indices if idx not in buy_indices]
-    sell_indices = np.random.choice(sell_indices_pool, size=int(n*0.3), replace=False)
+    sell_indices = np.random.choice(sell_indices_pool, size=int(n*0.4), replace=False)
     
     # Set the target values
     features.loc[buy_indices, 'target'] = 2  # Buy

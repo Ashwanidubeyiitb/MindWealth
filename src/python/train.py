@@ -13,26 +13,29 @@ from trading_strategies import MACDStrategy, RSIStrategy, SupertrendStrategy
 # Add the project root to the Python path
 sys.path.append(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-def create_sequences(data, seq_length=60):
-    """Create sequences for LSTM model"""
-    # Select only features we want to use
+def create_sequences(data, seq_length=40):
+    """Create sequences for LSTM model with additional features"""
+    # Select features to use
     feature_cols = ['Close', 'High', 'Low', 'Open', 'Volume', 
                    'returns', 'log_returns', 'volatility', 'volume_ma', 'volume_std']
+    
+    # Add more technical features if they exist
+    for col in ['sma5', 'sma20', 'roc1', 'roc5']:
+        if col in data.columns:
+            feature_cols.append(col)
     
     # Extract features and target
     X_data = data[feature_cols].copy()
     y_data = data['target'].values
     
-    # Normalize features if not already normalized
+    # Normalize features
     for col in X_data.columns:
-        if X_data[col].std() > 10:  # Only normalize if not already normalized
+        if X_data[col].std() > 0.001:  # Only normalize if not already normalized
             X_data[col] = (X_data[col] - X_data[col].mean()) / (X_data[col].std() + 1e-8)
     
     X, y = [], []
     for i in range(seq_length, len(data)):
-        # Get sequence of features
         X.append(X_data.iloc[i-seq_length:i].values)
-        # Get target and ensure it's an integer
         y.append(int(y_data[i]))
     
     return np.array(X), np.array(y, dtype=np.int32)
