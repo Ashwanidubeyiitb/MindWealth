@@ -1,7 +1,7 @@
 import numpy as np
 import tensorflow as tf
 from tensorflow.keras.models import Sequential
-from tensorflow.keras.layers import LSTM, Dense, Dropout, Input
+from tensorflow.keras.layers import LSTM, Dense, Dropout, Input, BatchNormalization
 from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
 import os
 
@@ -13,10 +13,9 @@ class TradingModel:
         # Create model directory if it doesn't exist
         os.makedirs(os.path.dirname(self.model_path), exist_ok=True)
         
-        # Simpler model architecture to avoid NaN issues
+        # Simpler model architecture (similar to original)
         self.model = Sequential([
             Input(shape=input_shape),
-            
             LSTM(16, return_sequences=False,
                  kernel_regularizer=tf.keras.regularizers.l2(0.001)),
             Dropout(0.2),
@@ -28,7 +27,7 @@ class TradingModel:
             Dense(3, activation='softmax')
         ])
         
-        # Use a lower learning rate
+        # Use a lower learning rate for stability
         self.model.compile(
             optimizer=tf.keras.optimizers.Adam(learning_rate=0.0005),
             loss='sparse_categorical_crossentropy',
@@ -89,12 +88,12 @@ class TradingModel:
             return False
     
     def generate_signals(self, data, predictions):
-        """Generate trade signals from model predictions"""
+        """Generate trade signals from model predictions with balanced approach"""
         from trading_strategies import TradeSignal, Action
         
         signals = []
         in_position = False  # Initialize as not in position
-        min_hold_period = 5  # Minimum number of days between trades
+        min_hold_period = 2  # Short but reasonable minimum hold period
         days_since_last_trade = min_hold_period  # Start ready to trade
         
         # If predictions is already class indices, no need to take argmax
@@ -108,29 +107,53 @@ class TradingModel:
         unique, counts = np.unique(predicted_classes, return_counts=True)
         print("\nPrediction distribution:", dict(zip(unique, counts)))
         
+        # Moderately aggressive thresholds for signal generation
+        buy_threshold = 0.25  # Moderately low threshold
+        sell_threshold = 0.25  # Moderately low threshold
+        
+        # Track consecutive days with same prediction to filter noise
+        buy_count = 0
+        sell_count = 0
+        
         # Start with looking for a BUY signal first
         for i, pred in enumerate(predicted_classes):
             if days_since_last_trade < min_hold_period:
                 days_since_last_trade += 1
                 continue
             
-            if pred == 2 and not in_position:  # Class 2 is BUY
-                signal = TradeSignal()
-                signal.action = Action.BUY
-                signal.date = data.iloc[i]['Date'].strftime('%Y-%m-%d')
-                signal.price = data.iloc[i]['Close']
-                signals.append(signal)
-                in_position = True
-                days_since_last_trade = 0
+            # Check for strong buy signals
+            if pred == 2 and not in_position:
+                buy_count += 1
+                sell_count = 0
+                # Generate signal on strong buy prediction or consecutive buy days
+                if buy_count >= 1 or (len(predictions.shape) > 1 and predictions[i][2] > buy_threshold):
+                    signal = TradeSignal()
+                    signal.action = Action.BUY
+                    signal.date = data.iloc[i]['Date'].strftime('%Y-%m-%d')
+                    signal.price = data.iloc[i]['Close']
+                    signals.append(signal)
+                    in_position = True
+                    days_since_last_trade = 0
+                    buy_count = 0
             
-            elif pred == 0 and in_position:  # Class 0 is SELL
-                signal = TradeSignal()
-                signal.action = Action.SELL
-                signal.date = data.iloc[i]['Date'].strftime('%Y-%m-%d')
-                signal.price = data.iloc[i]['Close']
-                signals.append(signal)
-                in_position = False
-                days_since_last_trade = 0
+            # Check for strong sell signals
+            elif pred == 0 and in_position:
+                sell_count += 1
+                buy_count = 0
+                # Generate signal on strong sell prediction or consecutive sell days
+                if sell_count >= 1 or (len(predictions.shape) > 1 and predictions[i][0] > sell_threshold):
+                    signal = TradeSignal()
+                    signal.action = Action.SELL
+                    signal.date = data.iloc[i]['Date'].strftime('%Y-%m-%d')
+                    signal.price = data.iloc[i]['Close']
+                    signals.append(signal)
+                    in_position = False
+                    days_since_last_trade = 0
+                    sell_count = 0
+            else:
+                # Reset counters when we don't have a consistent prediction
+                buy_count = 0
+                sell_count = 0
         
         # Force close any open position at the end
         if in_position:

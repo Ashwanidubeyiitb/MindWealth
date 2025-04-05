@@ -178,7 +178,7 @@ def prepare_labels(features):
     return features
 
 def generate_balanced_labels(features):
-    """Manually create balanced labels for better model training"""
+    """Create more balanced labels with emphasis on trading signals"""
     # Reset the target column
     features['target'] = 1  # Default to hold
     
@@ -186,10 +186,10 @@ def generate_balanced_labels(features):
     valid_indices = features.index.tolist()
     n = len(valid_indices)
     
-    # Ensure we have some examples of each class
-    buy_indices = np.random.choice(valid_indices, size=int(n*0.2), replace=False)
+    # Increase trading signals to 30% each (Buy/Sell)
+    buy_indices = np.random.choice(valid_indices, size=int(n*0.3), replace=False)
     sell_indices_pool = [idx for idx in valid_indices if idx not in buy_indices]
-    sell_indices = np.random.choice(sell_indices_pool, size=int(n*0.2), replace=False)
+    sell_indices = np.random.choice(sell_indices_pool, size=int(n*0.3), replace=False)
     
     # Set the target values
     features.loc[buy_indices, 'target'] = 2  # Buy
@@ -197,5 +197,8 @@ def generate_balanced_labels(features):
     
     # Ensure target is integer type
     features['target'] = features['target'].astype(np.int32)
+    
+    # Reset index to ensure continuous indices
+    features = features.reset_index(drop=True)
     
     return features
